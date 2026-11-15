@@ -10,7 +10,9 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
 import android.view.MotionEvent
@@ -19,11 +21,17 @@ import android.view.WindowManager
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 
 class FloatingService : Service() {
     private lateinit var wm: WindowManager
     private var bubble: View? = null
     private var panel: View? = null
+    private var panelText: TextView? = null
+    private val handler = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -121,15 +129,79 @@ class FloatingService : Service() {
             )
             return
         }
-        val text = svc.readScreen().ifBlank { "Ekranda yazı tapılmadı" }
-        showPanel(text)
+        val key = getSharedPreferences("prefs", MODE_PRIVATE)
+            .getString("gemini_key", "") ?: ""
+        if (key.isBlank()) {
+            Toast.makeText(
+                this,
+                "Əvvəlcə app-ı açıb API açarını saxla",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+        val screen = svc.readScreen()
+        if (screen.isBlank()) {
+            showPanel("Ekranda yazı tapılmadı")
+            return
+        }
+        showPanel("Düşünürəm...")
+        Thread {
+            val result = askGemini(key, screen)
+            handler.post { panelText?.text = result }
+        }.start()
+    }
+
+    private fun askGemini(key: String, screen: String): String {
+        return try {
+            val prompt = "Aşağıda telefon ekranından oxunmuş mətn var. " +
+                "Orada görüş, iclas, müştəri, tapşırıq və ya vaxt/tarix varsa, " +
+                "onları qısa siyahı ilə çıxar (kim, nə vaxt, harada). " +
+                "Heç nə yoxdursa, bunu qısa yaz. Azərbaycan dilində cavab ver.\n\n" +
+                "Mətn:\n" + screen.take(6000)
+            val body = JSONObject().put(
+                "contents",
+                JSONArray().put(
+                    JSONObject().put(
+                        "parts",
+                        JSONArray().put(JSONObject().put("text", prompt))
+                    )
+                )
+            )
+            val url = URL(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
+            )
+            val c = url.openConnection() as HttpURLConnection
+            c.requestMethod = "POST"
+            c.setRequestProperty("Content-Type", "application/json")
+            c.setRequestProperty("x-goog-api-key", key)
+            c.connectTimeout = 15000
+            c.readTimeout = 30000
+            c.doOutput = true
+            c.outputStream.use { it.write(body.toString().toByteArray()) }
+            val code = c.responseCode
+            val stream = if (code in 200..299) c.inputStream else c.errorStream
+            val resp = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                "Xəta $code:\n" + resp.take(300)
+            } else {
+                JSONObject(resp)
+                    .getJSONArray("candidates")
+                    .getJSONObject(0)
+                    .getJSONObject("content")
+                    .getJSONArray("parts")
+                    .getJSONObject(0)
+                    .getString("text")
+            }
+        } catch (e: Exception) {
+            "Xəta: " + e.message
+        }
     }
 
     private fun showPanel(text: String) {
         val tv = TextView(this).apply {
             this.text = text
             setTextColor(Color.WHITE)
-            textSize = 14f
+            textSize = 15f
             setPadding(32, 32, 32, 32)
             setOnClickListener { closePanel() }
         }
@@ -146,11 +218,13 @@ class FloatingService : Service() {
         ).apply { gravity = Gravity.BOTTOM }
         wm.addView(sv, lp)
         panel = sv
+        panelText = tv
     }
 
     private fun closePanel() {
         panel?.let { wm.removeView(it) }
         panel = null
+        panelText = null
     }
 
     override fun onDestroy() {
