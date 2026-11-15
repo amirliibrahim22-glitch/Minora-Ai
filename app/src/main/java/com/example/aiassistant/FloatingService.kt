@@ -144,7 +144,7 @@ class FloatingService : Service() {
             showPanel("Ekranda yazı tapılmadı")
             return
         }
-        showPanel("Düşünürəm...")
+        showPanel("Düşünürəm... (1 dəqiqəyə qədər çəkə bilər)")
         Thread {
             val result = askGemini(key, screen)
             handler.post { panelText?.text = result }
@@ -157,7 +157,7 @@ class FloatingService : Service() {
                 "Orada görüş, iclas, müştəri, tapşırıq və ya vaxt/tarix varsa, " +
                 "onları qısa siyahı ilə çıxar (kim, nə vaxt, harada). " +
                 "Heç nə yoxdursa, bunu qısa yaz. Azərbaycan dilində cavab ver.\n\n" +
-                "Mətn:\n" + screen.take(6000)
+                "Mətn:\n" + screen.take(3000)
             val body = JSONObject().put(
                 "contents",
                 JSONArray().put(
@@ -174,8 +174,8 @@ class FloatingService : Service() {
             c.requestMethod = "POST"
             c.setRequestProperty("Content-Type", "application/json")
             c.setRequestProperty("x-goog-api-key", key)
-            c.connectTimeout = 15000
-            c.readTimeout = 30000
+            c.connectTimeout = 30000
+            c.readTimeout = 90000
             c.doOutput = true
             c.outputStream.use { it.write(body.toString().toByteArray()) }
             val code = c.responseCode
